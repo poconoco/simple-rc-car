@@ -14,14 +14,19 @@ template<class SerialT> class BtRcReceiver {
       memset(_buffer, 0, _packetSize);
 
       _lastPacketReceived = 0;
-
+      _checksumErrorCount = 0;
       _switchesBitmask = 0;
       memset(_axes, 0, sizeof(_axes));
       memset(_sliders, 0, sizeof(_sliders));
       memset(_reserved, 0, sizeof(_reserved));
     }
 
-    void init(const String btName) {
+    ~BtRcReceiver() {
+      delete _buffer;
+    }
+
+    void init(const String btName, const String pinCode) {
+      // Give the module time to init
       delay(250);
 
       // By default BT modules usually have speed 9600
@@ -39,6 +44,11 @@ template<class SerialT> class BtRcReceiver {
 
       // Set BT device name to be seen on the phone when pairing
       _serial->println("AT+NAME"+btName);
+      delay(100);
+
+      _serial->println("AT+PSWD"+pinCode);
+      delay(100);
+
       _inited = true;
     }
 
@@ -89,6 +99,17 @@ template<class SerialT> class BtRcReceiver {
       }
     }
 
+    void send(String message) {
+      if (! _inited)
+        return;
+
+      _serial->println(message);
+    }
+
+    unsigned long getChecksumErrorCount() {
+      return _checksumErrorCount;
+    }
+
   private:    
     HardwareSerial* _serial;
     bool _inited = false;
@@ -104,6 +125,7 @@ template<class SerialT> class BtRcReceiver {
 
     unsigned long _lastPacketReceived;
     unsigned long _packetReceiveTimeout;
+    unsigned long _checksumErrorCount;
 
   private:
     bool readByte() {
@@ -125,8 +147,10 @@ template<class SerialT> class BtRcReceiver {
           checksum ^= _buffer[(_bp+i) % _packetSize];
 
         // Checksum failed
-        if (checksum != _buffer[(_bp+checksumSize) % _packetSize])
+        if (checksum != _buffer[(_bp+checksumSize) % _packetSize]) {
+          _checksumErrorCount++;
           return false;
+        }
 
         // Checksum OK, meaning we have valid data! Now, read it
 
@@ -148,9 +172,9 @@ void setup() {
   int leftMotorPin = 10;
   int rightMotorPin = 9;
 
-  int headLightPin = 2;
+  int headLightPin = 5;
   int tailLightPin = 3;
-  int honkPin = 5;
+  int honkPin = 6;
 
   int minTurn = 100;
   int maxTurn = 250;
@@ -160,17 +184,19 @@ void setup() {
 
   int currentTurn = (minTurn + maxTurn) / 2;
   int speedStop = (minMotor + maxMotor) / 2;
-  int currentSpeed = speedStop;
 
   int tailLightSpeedThreshold = 10;
 
   int lastTurnWrote = 0;
   int lastSpeedWrote = 0;
 
-  int lastControlCycle;
+  unsigned long lastControlCycle = 0;
+  unsigned long lastSendStatus = 0;
+  unsigned long lastBlinkCycle = 0;
+  bool blinkState = false;
 
   BtRcReceiver<HardwareSerial> rc(&Serial);
-  rc.init("Noco3 CAR*");
+  rc.init("Noco CAR", "1234");
 
   pinMode(turnPin, OUTPUT);
   pinMode(leftMotorPin, OUTPUT);
@@ -184,19 +210,44 @@ void setup() {
   while(true) {
     rc.read();
 
-    // TODO: fix ranges
-    float newTurn = map(rc.getX1(), -128, 127, minTurn, maxTurn);
-    float newSpeed = map(rc.getY1(), -128, 127, minMotor, maxMotor);
+    int8_t rawTurn = rc.getX1();
+    int8_t rawSpeed = rc.getY1();
 
-    int now = millis();
+    float newTurn = map(rawTurn, -128, 127, minTurn, maxTurn);
+    float newSpeed = map(rawSpeed, -128, 127, minMotor, maxMotor);
 
-    if (now - lastControlCycle > 5) {
+    unsigned long now = millis();
+
+    if (now - lastBlinkCycle > 500) {
+      lastBlinkCycle = now;
+      blinkState = !blinkState;
+    }
+
+    if (now - lastSendStatus > 50) {
+      lastSendStatus = now;
+
+      int sensorValue = analogRead(A0);
+      float rawVoltage = (float)sensorValue * (5.0 / 1023.0);
+      float adjustedVoltage = rawVoltage * 3;  // I'm using x3 voltage divider before measuring
+      char vbuf[5];
+      char sbuf[5];
+      char tbuf[5];
+      char ebuf[5];
+
+      dtostrf(adjustedVoltage, 4, 2, vbuf);
+      itoa(rawSpeed, sbuf, 10);
+      itoa(rawTurn, tbuf, 10);
+      itoa(rc.getChecksumErrorCount(), ebuf, 10);
+
+      rc.send(String("Voltage: ")+vbuf+"V"+"\tSpeed: "+sbuf+"\tTurn: "+tbuf+"\tErrors: "+ebuf);
+    }
+
+    if (now - lastControlCycle > 20) {
       lastControlCycle = now;
 
       currentTurn = currentTurn + (newTurn - currentTurn) / 40;
       float maxDelta = 1;
       float deltaTurn = newTurn - currentTurn;
-      float deltaSpeed = newSpeed - currentSpeed;
 
       if (abs(deltaTurn) > maxDelta) {
         currentTurn += deltaTurn > 0 ? maxDelta : -maxDelta;
@@ -204,24 +255,28 @@ void setup() {
         currentTurn += deltaTurn;
       }
 
-      if (abs(deltaSpeed) < maxDelta) {
-        currentSpeed += deltaSpeed > 0 ? maxDelta : -maxDelta;
-      } else {
-        currentSpeed += deltaSpeed;
-      }
-
       if (lastTurnWrote != currentTurn) {
         analogWrite(turnPin, currentTurn);
         lastTurnWrote = currentTurn;
       }
 
-      if (lastSpeedWrote != currentSpeed) {
-        analogWrite(leftMotorPin, currentSpeed);
-        analogWrite(rightMotorPin, maxMotor-(currentSpeed-minMotor));
-        lastSpeedWrote = currentSpeed;
+      if (lastSpeedWrote != newSpeed) {
+        analogWrite(leftMotorPin, newSpeed);
+        analogWrite(rightMotorPin, maxMotor-(newSpeed-minMotor));
+        lastSpeedWrote = newSpeed;
+      }
 
-        if (abs(currentSpeed - speedStop) > tailLightSpeedThreshold) {
-          if (rc.getA())
+      if (rc.getB()) {  // Emergency flasher
+        if (blinkState) {
+          analogWrite(headLightPin, 50);
+          digitalWrite(tailLightPin, HIGH);
+        } else {
+          digitalWrite(headLightPin, LOW);
+          digitalWrite(tailLightPin, LOW);
+        }
+      } else {
+        if (abs(newSpeed - speedStop) > tailLightSpeedThreshold) {
+          if (rc.getA())  // If head lights on
             analogWrite(tailLightPin, 50);  // Half-on
           else
             digitalWrite(tailLightPin, LOW);  // Full on
@@ -229,13 +284,14 @@ void setup() {
           digitalWrite(tailLightPin, HIGH);
         }
 
-        digitalWrite(headLightPin, rc.getA() ? HIGH : LOW);
-
-        if (rc.getE())
-          analogWrite(honkPin, 128);
-        else
-          digitalWrite(honkPin, LOW);
+        digitalWrite(headLightPin, rc.getA() ? HIGH : LOW);  // Head lights
       }
+
+      if (rc.getE())  // Honk
+        analogWrite(honkPin, 128);
+      else
+        digitalWrite(honkPin, LOW);
+
     }
   }
 }
