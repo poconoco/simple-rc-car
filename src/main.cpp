@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include "BtRcReceiver.h"
+#include "bt-remote/receivers/cpp/BtRcReceiver.h"
 
 void setup() {
 
