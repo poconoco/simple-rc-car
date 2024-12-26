@@ -30,8 +30,8 @@ void setup() {
   unsigned long lastBlinkCycle = 0;
   bool blinkState = false;
 
-  BtRcReceiver<HardwareSerial> rc(&Serial);
-  rc.init("Noco CAR", "1234");
+  BtRcReceiver<HardwareSerial> rc(&Serial, "Noco CAR", "1234");
+  rc.init();
 
   pinMode(turnPin, OUTPUT);
   pinMode(leftMotorPin, OUTPUT);
