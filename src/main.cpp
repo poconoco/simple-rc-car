@@ -43,7 +43,7 @@ void setup() {
   pinMode(honkPin, OUTPUT);
 
   while(true) {
-    rc.read();
+    rc.tick();
 
     int8_t rawTurn = rc.getX1();
     int8_t rawSpeed = rc.getY1();
