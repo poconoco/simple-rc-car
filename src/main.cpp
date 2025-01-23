@@ -61,8 +61,8 @@ void setup() {
     if (now - lastSendStatus > 50) {
       lastSendStatus = now;
 
-      int sensorValue = analogRead(A0);
-      float rawVoltage = (float)sensorValue * (5.0 / 1023.0);
+      int adcReading = analogRead(A0);
+      float rawVoltage = (float)adcReading * (5.0 / 1023.0);
       float adjustedVoltage = rawVoltage * 3;  // I'm using x3 voltage divider before measuring
       char vbuf[5];
       char sbuf[5];
@@ -74,7 +74,7 @@ void setup() {
       itoa(rawTurn, tbuf, 10);
       itoa(rc.getChecksumErrorCount(), ebuf, 10);
 
-      rc.send(String("Voltage: ")+vbuf+"V"+"\tSpeed: "+sbuf+"\tTurn: "+tbuf+"\tErrors: "+ebuf);
+      rc.send(String("Voltage: ")+vbuf+"V"+"\nSpeed: "+sbuf+"\nTurn: "+tbuf+"\nErrors: "+ebuf);
     }
 
     if (now - lastControlCycle > 20) {
